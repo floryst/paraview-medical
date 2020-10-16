@@ -47,6 +47,37 @@ function lpsDirToLabels(dir) {
   return label;
 }
 
+const createGeometryJob = (rep, sliceRange, view) => ({
+  name: `Geometry Slice Job for ${rep.getProxyId()}`,
+  // TODO rep and view could be deleted by this point
+  entry: (done, isCancelled) => {
+    // generate slice info
+    const axis = view.getAxis();
+    const normal = [0, 0, 0];
+    normal[axis] = 1;
+    const pos = [0, 0, 0];
+    const slices = [];
+    for (let s = sliceRange[0]; s < sliceRange[1]; s += 1) {
+      slices.push(s);
+    }
+
+    let i = 0;
+    // TODO do this in a web worker
+    const loop = async () => {
+      if (isCancelled()) return;
+      if (rep && i < slices.length) {
+        pos[axis] = i;
+        rep.cacheSlice(normal, pos);
+        i += 1;
+        setTimeout(loop, 1);
+      } else {
+        await done();
+      }
+    };
+    setTimeout(loop, 1);
+  },
+});
+
 export default {
   name: 'VtkTwoView',
 
@@ -85,7 +116,7 @@ export default {
     },
     sliceRange() {
       const { bounds } = this.worldOrientation;
-      return bounds.slice(this.axis * 2, (this.axis + 1) * 2);
+      return bounds.slice(this.axis * 2, (this.axis + 1) * 2).map(Math.round);
     },
     sliceSpacing() {
       const { spacing } = this.worldOrientation;
@@ -121,6 +152,7 @@ export default {
     },
     sceneSources() {
       this.updateRepresentations();
+      this.startGeometrySliceJobs();
       this.resetCamera();
       this.render();
     },
@@ -383,6 +415,18 @@ export default {
       }
     },
 
+    startGeometrySliceJobs() {
+      this.view
+        .getRepresentations()
+        .filter((rep) => rep.isA('vtkCutGeometryRepresentationProxy'))
+        .forEach(async (rep) => {
+          const job = await this.createJob(
+            createGeometryJob(rep, this.sliceRange, this.view)
+          );
+          await this.startJob(job);
+        });
+    },
+
     onMouseMove(ev) {
       if (this.activeWidgetID !== NO_WIDGET) {
         this.updateActiveWidget();
@@ -477,6 +521,7 @@ export default {
     },
 
     ...mapActions(['setWindowing', 'setSlices']),
+    ...mapActions('jobs', ['createJob', 'startJob']),
   },
 };
 </script>
